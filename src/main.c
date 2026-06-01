@@ -4,14 +4,14 @@
 #include "loader.h"
 #include "logger.h"
 
-ENTRY int main(payload_args_t *args) {
+__attribute__((section(".entry"))) int main(payload_args_t *args) {
   if (args == 0)
     return -1;
 
   init_libkernel_api();
   init_libc_api();
 
-  if (logger_init() == -1) {
+  if (logger_init() != 0) {
     notify("unable to init logger !!");
     return -1;
   }
@@ -25,22 +25,22 @@ ENTRY int main(payload_args_t *args) {
   init_karw(args);
   init_kaddrs(args->allproc);
 
-  if (patch_qa_flags() == -1) {
+  if (patch_qa_flags() != 0) {
     notify("unable to patch qa flags !!");
     return -1;
   }
 
-  if (init_loader(args->elfldr_ptr, args->elfldr_size) == -1) {
+  if (init_loader(args->elfldr_ptr, args->elfldr_size) != 0) {
     notify("unable to init elfldr !!");
     return -1;
   }
 
-  if (init_loader_args() == -1) {
+  if (init_loader_args() != 0) {
     notify("unable to init elfldr args !!");
     return -1;
   }
 
-  if (run_loader() == -1) {
+  if (run_loader() != 0) {
     notify("unable to run elfldr !!");
     return -1;
   }

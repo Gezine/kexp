@@ -4,19 +4,19 @@
 #include "logger.h"
 #include <elf.h>
 
-DATA loader_ctx_t loader_ctx;
+loader_ctx_t loader_ctx = {0};
 
-int init_loader(char *elf_ptr, size_t size) {
-  if (elf_ptr == 0) {
+int init_loader(char *ptr, size_t size) {
+  if (ptr == 0) {
     log("empty elf !!");
     return -1;
   }
 
   log("init loader started...");
 
-  Elf64_Ehdr *ehdr = (Elf64_Ehdr *)elf_ptr;
-  Elf64_Phdr *phdr = (Elf64_Phdr *)(elf_ptr + ehdr->e_phoff);
-  Elf64_Shdr *shdr = (Elf64_Shdr *)(elf_ptr + ehdr->e_shoff);
+  Elf64_Ehdr *ehdr = (Elf64_Ehdr *)ptr;
+  Elf64_Phdr *phdr = (Elf64_Phdr *)(ptr + ehdr->e_phoff);
+  Elf64_Shdr *shdr = (Elf64_Shdr *)(ptr + ehdr->e_shoff);
 
   if (size < sizeof(Elf64_Ehdr) || size < sizeof(Elf64_Phdr) + ehdr->e_phoff ||
       size < sizeof(Elf64_Shdr) + ehdr->e_shoff) {
@@ -80,7 +80,7 @@ int init_loader(char *elf_ptr, size_t size) {
       if (!phdr[i].p_memsz || !phdr[i].p_filesz)
         continue;
 
-      memcpy(loader_ctx.base + phdr[i].p_vaddr, elf_ptr + phdr[i].p_offset,
+      memcpy(loader_ctx.base + phdr[i].p_vaddr, ptr + phdr[i].p_offset,
              phdr[i].p_filesz);
     }
   }
@@ -90,7 +90,7 @@ int init_loader(char *elf_ptr, size_t size) {
     if (shdr[i].sh_type != SHT_RELA)
       continue;
 
-    Elf64_Rela *rela = (Elf64_Rela *)(elf_ptr + shdr[i].sh_offset);
+    Elf64_Rela *rela = (Elf64_Rela *)(ptr + shdr[i].sh_offset);
     for (int j = 0; j < (int)(shdr[i].sh_size / sizeof(Elf64_Rela)); j++) {
       if ((rela[j].r_info & 0xffffffff) == R_X86_64_RELATIVE) {
         *(uintptr_t *)(loader_ctx.base + rela[j].r_offset) =
@@ -142,14 +142,14 @@ int init_loader_args() {
   uint8_t prot = PROT_READ | PROT_WRITE;
   int flags = MAP_ANONYMOUS | MAP_PRIVATE;
 
-  loader_ctx.args_map = mmap(0, PAGE_SIZE, prot, flags, -1, 0);
-  if (loader_ctx.args_map == UINTPTR_MAX) {
+  loader_ctx.args_base = mmap(0, PAGE_SIZE, prot, flags, -1, 0);
+  if (loader_ctx.args_base == UINTPTR_MAX) {
     log("unable to map memory with size %#x prot: %#x flags: %#x !!", PAGE_SIZE,
         prot, flags);
     return -1;
   }
 
-  log("loader_ctx { args_map: %#lx }", loader_ctx.args_map);
+  log("loader_ctx { args_base: %#lx }", loader_ctx.args_base);
 
   int master_sock = socket(AF_INET6, SOCK_DGRAM, 0);
   if (master_sock == -1) {
@@ -163,19 +163,19 @@ int init_loader_args() {
     return -1;
   }
 
-  *(uint32_t *)(loader_ctx.args_map + 0x00) = 0x14;
-  *(uint32_t *)(loader_ctx.args_map + 0x04) = IPPROTO_IPV6;
-  *(uint32_t *)(loader_ctx.args_map + 0x08) = IPV6_TCLASS;
+  *(uint32_t *)(loader_ctx.args_base + 0x00) = 0x14;
+  *(uint32_t *)(loader_ctx.args_base + 0x04) = IPPROTO_IPV6;
+  *(uint32_t *)(loader_ctx.args_base + 0x08) = IPV6_TCLASS;
 
   if (setsockopt(master_sock, IPPROTO_IPV6, IPV6_2292PKTOPTIONS,
-                 loader_ctx.args_map, 0x18) == -1) {
+                 loader_ctx.args_base, 0x18) == -1) {
     log("unable to set socket option IPV6_2292PKTOPTIONS !!");
     return -1;
   }
 
-  memset(loader_ctx.args_map, 0, 0x14);
+  memset(loader_ctx.args_base, 0, 0x14);
 
-  if (setsockopt(victim_sock, IPPROTO_IPV6, IPV6_PKTINFO, loader_ctx.args_map,
+  if (setsockopt(victim_sock, IPPROTO_IPV6, IPV6_PKTINFO, loader_ctx.args_base,
                  0x14) == -1) {
     log("unable to set socket option IPV6_PKTINFO !!");
     return -1;
@@ -205,9 +205,9 @@ int init_loader_args() {
     return -1;
   }
 
-  int *rwpipe = loader_ctx.args_map + 0x100;
-  int *rwpair = loader_ctx.args_map + 0x200;
-  uint64_t *ret_addr = loader_ctx.args_map + 0x300;
+  int *rwpipe = loader_ctx.args_base + 0x100;
+  int *rwpair = loader_ctx.args_base + 0x200;
+  uint64_t *ret_addr = loader_ctx.args_base + 0x300;
 
   rwpipe[0] = pipe_fd[0];
   rwpipe[1] = pipe_fd[1];
@@ -227,7 +227,7 @@ int init_loader_args() {
   }
 
   uintptr_t kernel_data_base = get_kernel_data_base();
-  if (kernel_data_base == UINTPTR_MAX) {
+  if (kernel_data_base == 0) {
     log("unable to get kernel data base !!");
     return -1;
   }
@@ -281,7 +281,7 @@ int run_loader() {
   close(loader_ctx.args.rwpipe[0]);
   close(loader_ctx.args.rwpipe[1]);
 
-  munmap(loader_ctx.args_map, PAGE_SIZE);
+  munmap(loader_ctx.args_base, PAGE_SIZE);
 
   log("loader args cleanup completed !!");
   return 0;

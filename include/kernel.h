@@ -9,34 +9,14 @@
 
 #define CPU_PDE_PRESENT_SHIFT 0
 #define CPU_PDE_PRESENT_MASK 1
-#define CPU_PDE_RW_SHIFT 1
-#define CPU_PDE_RW_MASK 1
-#define CPU_PDE_USER_SHIFT 2
-#define CPU_PDE_USER_MASK 1
-#define CPU_PDE_WRITE_THROUGH_SHIFT 3
-#define CPU_PDE_WRITE_THROUGH_MASK 1
-#define CPU_PDE_CACHE_DISABLE_SHIFT 4
-#define CPU_PDE_CACHE_DISABLE_MASK 1
-#define CPU_PDE_ACCESSED_SHIFT 5
-#define CPU_PDE_ACCESSED_MASK 1
-#define CPU_PDE_DIRTY_SHIFT 6
-#define CPU_PDE_DIRTY_MASK 1
 #define CPU_PDE_PS_SHIFT 7
 #define CPU_PDE_PS_MASK 1
-#define CPU_PDE_GLOBAL_SHIFT 8
-#define CPU_PDE_GLOBAL_MASK 1
-#define CPU_PDE_XOTEXT_SHIFT 58
-#define CPU_PDE_XOTEXT_MASK 1
-#define CPU_PDE_PROTECTION_KEY_SHIFT 59
-#define CPU_PDE_PROTECTION_KEY_MASK 0x7FFF
-#define CPU_PDE_EXECUTE_DISABLE_SHIFT 63
-#define CPU_PDE_EXECUTE_DISABLE_MASK 1
 #define CPU_PG_PHYS_FRAME 0x000ffffffffff000
 #define CPU_PG_PS_FRAME 0x000fffffffe00000
-#define CPU_PDE_FIELD(pde, field) ((pde >> field##_SHIFT) & field##_MASK)
+#define CPU_PDE_FIELD(pde, field) ((pde >> CPU_PDE_##field##_SHIFT) & CPU_PDE_##field##_MASK)
 
-COMMON kaddrs_t kaddrs;
-COMMON karw_ctx_t karw_ctx;
+kaddrs_t kaddrs;
+karw_ctx_t karw_ctx;
 
 void init_karw(payload_args_t *args);
 void init_kaddrs(uintptr_t allproc);

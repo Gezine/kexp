@@ -1,54 +1,30 @@
 CC := clang-18
-
 BIN := kexp.bin
-
 SRC_DIR := src
 BUILD_DIR := build
 
-CFLAGS := -O3 -fPIE -ffreestanding -nostdlib -nostartfiles \
-	    -fno-omit-frame-pointer -Iinclude -Wall -Wextra -Werror \
-		-Wno-unused-variable -Wno-unused-function -Wno-unused-but-set-variable -Wno-uninitialized -Wno-int-conversion
+CFLAGS := -O3 -Iinclude \
+		-fPIE -fcommon -fno-omit-frame-pointer -fno-zero-initialized-in-bss \
+		-ffreestanding -nostdlib -nostartfiles \
+	    -Wall -Wextra -Werror -Wno-int-conversion
 
-OBJS := \
-  $(BUILD_DIR)/api.o \
-  $(BUILD_DIR)/main.o \
-  $(BUILD_DIR)/iommu.o \
-  $(BUILD_DIR)/logger.o \
-  $(BUILD_DIR)/loader.o \
-  $(BUILD_DIR)/kernel.o \
-  $(BUILD_DIR)/syscalls.o \
+SRCS := $(wildcard $(SRC_DIR)/*.c)
+OBJS := $(patsubst $(SRC_DIR)/%.c,$(BUILD_DIR)/%.o,$(SRCS)) $(BUILD_DIR)/syscalls.o
+
+.PHONY: all clean
 
 all: $(BUILD_DIR)/$(BIN)
 
-$(BUILD_DIR):
-	mkdir -p $(BUILD_DIR)
+_ := $(shell mkdir -p $(BUILD_DIR))
 
-$(BUILD_DIR)/syscalls.S: $(SRC_DIR)/syscalls.S $(SRC_DIR)/syscalls.defs
-	cp $< $@
-
-	awk -F, '\
-	BEGIN { \
-    	print "\n"; \
-	} \
-	{ \
-    	print ".global " $$1 "_stub"; \
-    	print $$1 "_stub:"; \
-    	print "    mov rax, " $$2; \
-    	print "    jmp syscall"; \
-    	print ""; \
-	}' $(word 2,$^) >> $@
-
-$(BUILD_DIR)/syscalls.ld: $(SRC_DIR)/syscalls.defs
-	awk -F, '{print "PROVIDE(" $$1 " = " $$1 "_stub);"}' $< > $@
-
-$(BUILD_DIR)/syscalls.o: $(BUILD_DIR)/syscalls.S
+$(BUILD_DIR)/%.o: $(SRC_DIR)/%.c
 	$(CC) $(CFLAGS) -c $< -o $@
 
-$(BUILD_DIR)/%.o: $(SRC_DIR)/%.c | $(BUILD_DIR)
+$(BUILD_DIR)/%.o: $(SRC_DIR)/%.S
 	$(CC) $(CFLAGS) -c $< -o $@
 	
-$(BUILD_DIR)/$(BIN): $(OBJS) script.ld $(BUILD_DIR)/syscalls.ld
-	$(CC) $(CFLAGS) $(OBJS) -o $@ -Tscript.ld -T$(BUILD_DIR)/syscalls.ld
+$(BUILD_DIR)/$(BIN): $(OBJS) script.ld
+	$(CC) $(CFLAGS) -Tscript.ld $(OBJS) -o $@
 
 clean:
 	rm -rf $(BUILD_DIR)

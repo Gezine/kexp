@@ -5,10 +5,6 @@
 #include <stdint.h>
 #include <sys/types.h>
 
-#define PACKED __attribute__((packed))
-#define COMMON __attribute__((common))
-#define DATA __attribute__((section(".data")))
-#define ENTRY __attribute__((section(".entry")))
 #define ALIGN_UP(addr, align) (addr + (align - 1)) & ~(align - 1)
 #define ALIGN_DOWN(addr, align) addr & ~(align - 1)
 
@@ -86,6 +82,7 @@ typedef struct {
   uintptr_t softc;
   uintptr_t krodata;
   uintptr_t allproc;
+  uintptr_t fdt_ofiles;
 } kaddrs_t;
 
 #endif

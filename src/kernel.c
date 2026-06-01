@@ -4,8 +4,8 @@
 #include "logger.h"
 #include <elf.h>
 
-DATA kaddrs_t kaddrs;
-DATA karw_ctx_t karw_ctx;
+kaddrs_t kaddrs = {0};
+karw_ctx_t karw_ctx = {0};
 
 void init_karw(payload_args_t *args) {
   log("init karw started...");
@@ -64,7 +64,6 @@ void find_dyn_segment() {
 
 found:
   log("find dyn segment completed !!");
-  return;
 }
 
 void find_hash_table() {
@@ -143,8 +142,6 @@ ssize_t kread(void *dst, void *src, uint32_t sz) {
   if (n == -1)
     return -1;
 
-  // TODO: verbose
-
   return n;
 }
 
@@ -158,8 +155,6 @@ ssize_t kwrite(void *dst, void *src, uint32_t sz) {
   ssize_t n = write(karw_ctx.victim_pipe[1], src, sz);
   if (n == -1)
     return -1;
-
-  // TODO: verbose
 
   return n;
 }
@@ -183,17 +178,21 @@ uintptr_t pfind(pid_t pid) {
 }
 
 uintptr_t fget(int fd) {
-  uintptr_t p_fd;
-  uintptr_t fd_files;
   uintptr_t fde;
 
-  uintptr_t p = pfind(getpid());
+  if (kaddrs.fdt_ofiles == 0) {
+    uintptr_t p_fd;
+    uintptr_t fd_files;
 
-  kread(&p_fd, p + 0x48, sizeof(p_fd));
-  kread(&fd_files, p_fd, sizeof(fd_files));
+    uintptr_t p = pfind(getpid());
 
-  uintptr_t fdt_ofiles = fd_files + 8;
-  kread(&fde, fdt_ofiles + (fd * FILEDESCENT_SIZE), sizeof(fde));
+    kread(&p_fd, p + 0x48, sizeof(p_fd));
+    kread(&fd_files, p_fd, sizeof(fd_files));
+
+    kaddrs.fdt_ofiles = fd_files + 8;
+  }
+
+  kread(&fde, kaddrs.fdt_ofiles + (fd * FILEDESCENT_SIZE), sizeof(fde));
 
   return fde;
 }
@@ -233,20 +232,20 @@ void remove_pktinfo_from_so(int fd) {
 
 uintptr_t get_dmap(uintptr_t paddr) {
   if (paddr == 0)
-    return -1;
+    return 0;
 
   if (kaddrs.dmap == 0)
-    return -1;
+    return 0;
 
   return kaddrs.dmap + paddr;
 }
 
 uintptr_t get_paddr(uintptr_t vaddr) {
   if (vaddr == 0)
-    return -1;
+    return 0;
 
   if (kaddrs.dmap == 0)
-    return -1;
+    return 0;
 
   int pml4e_index = (vaddr >> 39) & 0x1FF;
   int pdpe_index = (vaddr >> 30) & 0x1FF;
@@ -254,51 +253,58 @@ uintptr_t get_paddr(uintptr_t vaddr) {
   int pte_index = (vaddr >> 12) & 0x1FF;
 
   uintptr_t cr3_dmap = get_dmap(kaddrs.cr3);
+  if (cr3_dmap == 0)
+    return 0;
+
   uintptr_t pml4e_vaddr = cr3_dmap + pml4e_index * 8;
   uintptr_t pml4e;
 
   kread(&pml4e, pml4e_vaddr, sizeof(pml4e));
 
-  if (CPU_PDE_FIELD(pml4e, CPU_PDE_PRESENT) != 1) {
-    return -1;
-  }
+  if (CPU_PDE_FIELD(pml4e, PRESENT) != 1)
+    return 0;
 
   uintptr_t pdp_paddr = pml4e & CPU_PG_PHYS_FRAME;
   uintptr_t pdp_dmap = get_dmap(pdp_paddr);
+  if (pdp_dmap == 0)
+    return 0;
+
   uintptr_t pdpe_vaddr = pdp_dmap + pdpe_index * 8;
   uintptr_t pdpe;
 
   kread(&pdpe, pdpe_vaddr, sizeof(pdpe));
 
-  if (CPU_PDE_FIELD(pdpe, CPU_PDE_PRESENT) != 1) {
-    return -1;
-  }
+  if (CPU_PDE_FIELD(pdpe, PRESENT) != 1)
+    return 0;
 
   uintptr_t pd_paddr = pdpe & CPU_PG_PHYS_FRAME;
   uintptr_t pd_dmap = get_dmap(pd_paddr);
+  if (pd_dmap == 0)
+    return 0;
+
   uintptr_t pde_vaddr = pd_dmap + pde_index * 8;
   uintptr_t pde;
 
   kread(&pde, pde_vaddr, sizeof(pde));
 
-  if (CPU_PDE_FIELD(pde, CPU_PDE_PRESENT) != 1) {
-    return -1;
-  }
+  if (CPU_PDE_FIELD(pde, PRESENT) != 1)
+    return 0;
 
-  if (CPU_PDE_FIELD(pde, CPU_PDE_PS) == 1) {
+  if (CPU_PDE_FIELD(pde, PS) == 1)
     return (pde & CPU_PG_PS_FRAME) | (vaddr & 0x1fffff);
-  }
 
   uintptr_t pt_paddr = pde & CPU_PG_PHYS_FRAME;
   uintptr_t pt_dmap = get_dmap(pt_paddr);
+  if (pt_dmap == 0)
+    return 0;
+
   uintptr_t pte_vaddr = pt_dmap + pte_index * 8;
   uintptr_t pte;
 
   kread(&pte, pte_vaddr, sizeof(pte));
 
-  if (CPU_PDE_FIELD(pte, CPU_PDE_PRESENT) != 1) {
-    return -1;
-  }
+  if (CPU_PDE_FIELD(pte, PRESENT) != 1)
+    return 0;
 
   return (pte & CPU_PG_PHYS_FRAME) | (vaddr & 0x3fff);
 }
@@ -321,7 +327,7 @@ uintptr_t find_vm_pmap_ptr(uintptr_t vmspace) {
   }
 
   log("unable to find vm_pmap !!");
-  return -1;
+  return 0;
 }
 
 uintptr_t find_openpsid_ptr() {
@@ -334,11 +340,12 @@ uintptr_t find_openpsid_ptr() {
 
   if (sysctlbyname("machdep.openpsid", data, &size, 0, 0) == -1) {
     log("unable to get sysctlbyname !!");
-    return -1;
+    return 0;
   }
 
-  for (uintptr_t addr = kaddrs.ktext + kaddrs.ksize - sizeof(tmp);
-       addr > kaddrs.kdata; addr -= 8) {
+  uintptr_t addr = kaddrs.ktext + kaddrs.ksize - sizeof(tmp);
+
+  while (addr > kaddrs.kdata) {
     kread(tmp, addr, sizeof(tmp));
 
     if (memcmp(data, tmp, sizeof(data)) == 0) {
@@ -346,10 +353,15 @@ uintptr_t find_openpsid_ptr() {
       log("find openpsid completed !!");
       return addr;
     }
+
+    if (addr < kaddrs.kdata + 8)
+      break;
+
+    addr -= 8;
   }
 
   log("unable to find openpsid !!");
-  return -1;
+  return 0;
 }
 
 uint32_t get_fw_version() {
@@ -359,21 +371,21 @@ uint32_t get_fw_version() {
 
   if (sysctlbyname("kern.sdk_version", &version, &size, 0, 0) == -1) {
     log("unable to get sysctlbyname !!");
-    return -1;
+    return 0;
   }
 
   return version;
 }
 
 uintptr_t get_kernel_data_base() {
-  uintptr_t kernel_data_base = -1;
+  uintptr_t kernel_data_base = 0;
 
   uint32_t version = get_fw_version();
   log("fw_version: %#x", version);
 
-  if (version == UINT32_MAX) {
+  if (version == 0) {
     log("unable to get fw version !!");
-    return -1;
+    return 0;
   }
 
   switch (version & 0xffff0000) {
@@ -499,8 +511,8 @@ uintptr_t get_vm_map_pmap(uintptr_t p) {
   kread(&p_vmspace, p + 0x200, sizeof(p_vmspace));
 
   uintptr_t vm_pmap_ptr = find_vm_pmap_ptr(p_vmspace);
-  if (vm_pmap_ptr == UINTPTR_MAX)
-    return -1;
+  if (vm_pmap_ptr == 0)
+    return 0;
 
   kread(&vm_pmap, vm_pmap_ptr, sizeof(vm_pmap));
 
@@ -514,8 +526,8 @@ uintptr_t get_vm_map_root(uintptr_t p) {
   kread(&p_vmspace, p + 0x200, sizeof(p_vmspace));
 
   uintptr_t vm_pmap_ptr = find_vm_pmap_ptr(p_vmspace);
-  if (vm_pmap_ptr == UINTPTR_MAX)
-    return -1;
+  if (vm_pmap_ptr == 0)
+    return 0;
 
   kread(&vm_root, vm_pmap_ptr - 8, sizeof(vm_root));
 
@@ -524,7 +536,7 @@ uintptr_t get_vm_map_root(uintptr_t p) {
 
 int vm_map_set_protection(uintptr_t vaddr, size_t sz, uint8_t prot) {
   uintptr_t vme = find_vm_map_entry(vaddr);
-  if (vme == UINTPTR_MAX) {
+  if (vme == 0) {
     return -1;
   }
 
@@ -551,15 +563,15 @@ int vm_map_set_protection(uintptr_t vaddr, size_t sz, uint8_t prot) {
 
 uintptr_t find_vm_map_entry(uintptr_t vaddr) {
   if (vaddr == 0) {
-    return -1;
+    return 0;
   }
 
   log("find vm_map_entry started...");
 
   uintptr_t p = pfind(getpid());
   uintptr_t root = get_vm_map_root(p);
-  if (root == UINTPTR_MAX)
-    return -1;
+  if (root == 0)
+    return 0;
 
   uintptr_t vme = root;
   while (vme) {
@@ -595,7 +607,7 @@ uintptr_t find_vm_map_entry(uintptr_t vaddr) {
   }
 
   log("failed to find vm_map_entry of addr %#lx", vaddr);
-  return -1;
+  return 0;
 }
 
 int patch_qa_flags() {
@@ -608,7 +620,7 @@ int patch_qa_flags() {
   uint32_t version = get_fw_version();
   log("fw_version: %#x", version);
 
-  if (version == UINT32_MAX) {
+  if (version == 0) {
     log("unable to get fw version !!");
     return -1;
   }
@@ -620,7 +632,7 @@ int patch_qa_flags() {
     utoken_flags_ptr = kaddrs.kdata - 0x1000 + 0xf0;
   } else {
     uintptr_t openpsid_ptr = find_openpsid_ptr();
-    if (openpsid_ptr == UINTPTR_MAX) {
+    if (openpsid_ptr == 0) {
       log("unable to find openpsid !!");
       return -1;
     }
@@ -633,8 +645,8 @@ int patch_qa_flags() {
     utoken_flags_ptr = openpsid_ptr + 0x78;
   }
 
-  log("qaf { security_flags_ptr: %#lx target_id_ptr: %#lx qa_flags_ptr: %#lx "
-      "utoken_flags_ptr: %#lx }",
+  log("qaf ptrs { security_flags: %#lx target_id: %#lx qa_flags: %#lx "
+      "utoken_flags: %#lx }",
       security_flags_ptr, target_id_ptr, qa_flags_ptr, utoken_flags_ptr);
 
   kread(&security_flags, security_flags_ptr, sizeof(security_flags));
@@ -642,7 +654,7 @@ int patch_qa_flags() {
   kread(&qa_flags, qa_flags_ptr, sizeof(qa_flags));
   kread(&utoken_flags, utoken_flags_ptr, sizeof(utoken_flags));
 
-  log("before qaf { security_flags: %#x target_id: %#x qa_flags: %#x "
+  log("qaf before { security_flags: %#x target_id: %#x qa_flags: %#x "
       "utoken_flags: "
       "%#x }",
       security_flags, target_id, qa_flags, utoken_flags);
@@ -652,12 +664,8 @@ int patch_qa_flags() {
   qa_flags |= 0x10300;
   utoken_flags |= 1;
 
-  log("new qaf { security_flags: %#x target_id: %#x qa_flags: %#x "
-      "utoken_flags: %#x }",
-      security_flags, target_id, qa_flags, utoken_flags);
-
   if (version >= 0x7000000u) {
-    if (iommu_init() == -1) {
+    if (iommu_init() != 0) {
       log("unable to init iommu !!");
       return -1;
     }
@@ -678,7 +686,7 @@ int patch_qa_flags() {
   kread(&qa_flags, qa_flags_ptr, sizeof(qa_flags));
   kread(&utoken_flags, utoken_flags_ptr, sizeof(utoken_flags));
 
-  log("after qaf { security_flags: %#x target_id: %#x qa_flags: %#x "
+  log("qaf after { security_flags: %#x target_id: %#x qa_flags: %#x "
       "utoken_flags: %#x }",
       security_flags, target_id, qa_flags, utoken_flags);
 

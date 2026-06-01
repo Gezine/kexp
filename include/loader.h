@@ -33,14 +33,14 @@ typedef struct {
 } loader_args_t;
 
 typedef struct {
-  uintptr_t base;
   size_t size;
+  uintptr_t base;
   uintptr_t entry;
-  uintptr_t args_map;
+  uintptr_t args_base;
   loader_args_t args;
 } loader_ctx_t;
 
-COMMON loader_ctx_t loader_ctx;
+loader_ctx_t loader_ctx;
 
 int init_loader(char *elfldr_ptr, size_t size);
 int init_loader_args();

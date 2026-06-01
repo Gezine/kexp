@@ -18,6 +18,7 @@ int logger_init() {
     return -1;
   }
 
+  close(fd);
   return 0;
 }
 
@@ -51,11 +52,8 @@ void log(const char *fmt, ...) {
 
   buf[tag_len + len] = '\n';
 
-  ssize_t n = write(STDOUT_FD, buf, total_len);
-  if (n == -1) {
-    free(buf);
-    return;
-  }
+  write(STDOUT_FD, buf, total_len);
+  free(buf);
 }
 
 void notify(const char *fmt, ...) {
